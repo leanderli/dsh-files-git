@@ -1,0 +1,39 @@
+{
+  "name": "dsh-files-git",
+  "version": "0.1.0",
+  "description": "Workspace files & git panel for the dsh Web UI: browse workspace files + git operations (fetch/pull/commit/push)",
+  "private": true,
+  "type": "module",
+  "author": "leanderli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leanderli/dsh-files-git.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leanderli/dsh-files-git/issues"
+  },
+  "homepage": "https://github.com/leanderli/dsh-files-git#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "git",
+    "file-browser",
+    "web-ui"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

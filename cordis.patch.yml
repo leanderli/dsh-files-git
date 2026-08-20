@@ -1,0 +1,12 @@
+# dsh-files-git bundle patch: mount the files & git panel plugin (host + browser halves).
+# `dsh plugin --profile web add <this package>` appends this bundle to the
+# profile's dsh.profile.bundles, so this row is composed on the next boot.
+#
+# Optional config:
+#   gitPath:     absolute path to git.exe (default: auto-resolved from PATH,
+#                skipping `.git-ai` shim dirs)
+#   defaultRoot: repository directory used when the client sends no repo
+#                (normally the panel sends the session's workspace cwd)
+- insert:
+    - id: files-git
+      name: 'dsh-files-git'
