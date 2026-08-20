@@ -16,6 +16,9 @@ file and version-control work happens without ever leaving the WebUI.
 - UI text follows the DSH language setting, with built-in **Chinese / English**;
 - Security-conscientious: RPC is loopback-trusted only, file browsing is confined to the workspace root.
 
+![Panel overview: file tree and Markdown preview](docs/screenshots/Snipaste_2026-08-20_22-25-36.png)
+*The panel: file tree, search, and Markdown preview*
+
 ---
 
 ## Table of Contents
@@ -57,6 +60,9 @@ file and version-control work happens without ever leaving the WebUI.
 - **Quick actions**: hover any entry to **reveal in file explorer**, **copy path**,
   or **copy name**; breadcrumb segments are clickable, with a "Open directory"
   button on the far right.
+
+![Browsing docs/screenshots with image preview](docs/screenshots/Snipaste_2026-08-20_22-37-26.png)
+*Image files preview inline, with open-in-browser / open-in-editor actions*
 
 ### Git operations
 
@@ -214,6 +220,9 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
 | --- | --- | --- |
 | Open fullscreen by default | Fullscreen | Default panel size on open |
 | Clicking produced files / file links | Off | Preview conversation artifacts inside the panel instead of opening the system app |
+
+![In-panel settings](docs/screenshots/Snipaste_2026-08-20_22-25-10.png)
+*The ⚙ settings tab, with the branch selector popover open*
 
 ## Internationalization (i18n)
 
