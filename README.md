@@ -212,6 +212,12 @@ dsh web
 - **回环围栏**：`/git-api` 通道以 `authority: "loopback"` 注册，走与 `/api`
   相同的浏览器信任围栏，仅回环来源（127.0.0.1 / localhost）可调用；从局域网
   地址访问时操作会被拒绝；
+- **独立服务围栏**：git / 文件操作运行在独立服务进程，仅绑定 `127.0.0.1` 的
+  随机端口；每个请求必须携带随机 Bearer token（经回环围栏的引导链路
+  `/git-api/service-info` 分发，落在用户级临时目录的运行时文件中，按用户
+  隔离）——无 token 的请求一律 401。浏览器直连时 CORS 仅精确回显回环
+  来源；从局域网访问 WebUI 时直连拿不到 CORS 许可，自动回落 DSH 代理
+  路径并被回环围栏拒绝（fail-closed），与直连模式出现前的行为一致；
 - **工作区约束**：文件浏览（`list` / `read` / `write` 相对路径分支）限定在
   工作区根目录内——`resolve` + `realpath` 双重包含校验，`..`、绝对路径、
   符号链接逃逸一律拒绝；
@@ -228,10 +234,21 @@ dsh web
 ### 架构
 
 - **Host 半区**（`lib/index.js`）：经共享 `connection` 通道注册 `POST /git-api/*`
-  RPC 端点，执行 git 命令与文件浏览，零运行时依赖；
+  RPC 端点，作为**生命周期管理器 + 回环代理**：按需拉起 / 复用独立服务进程
+  （用户级临时目录的单例运行时文件 + 健康检查；版本或配置变化自动轮换），
+  并经 `/git-api/service-info` 把服务端口与 token 下发给面板（引导直连）；
+  零运行时依赖；
+- **服务进程**（`lib/server/server.js`）：独立 Node 进程（复用 DSH 的 Node
+  二进制），真正执行 git 命令与文件浏览——git 不再占用 DSH 主进程的事件
+  循环，自带并发上限、git 进程树管理与 30 分钟空闲自退出；另提供
+  `GET /events` SSE 状态推送（fs.watch 防抖 + 10s 兜底轮询，≤4 并发流）；
+  零运行时依赖；
 - **Browser 半区**（`lib/client.js`）：自包含 React 面板，注册进
   `conversation.session.header.utilities`（顶栏按钮）、
   `conversation.input.dock`（blank 会话按钮）、`shell.overlay`（模态层）。
+  传输层自适应：取到 service-info 即**直连**服务（CORS 白名单仅回环来源），
+  直连不可用时自动降级为 DSH 代理路径；status 状态由 SSE 推送驱动
+  （流断开自动回退轮询）。
 
 ### 源码结构
 
@@ -297,12 +314,22 @@ dsh plugin --profile web remove dsh-files-git   # 官方方式；不要直接删
 回滚后再排查。
 
 **Q：Windows 下 git 操作偶发报错（退出码 0xC0000142）？**
-已知 Windows 大量 git 进程并发时的 DLL 初始化偶发失败，host 端已内置自动重试
+已知 Windows 大量 git 进程并发时的 DLL 初始化偶发失败，服务进程内置自动重试
 一次；若仍频繁出现，可经 [配置](#配置) 显式指定 `gitPath`。
 
+**Q：任务管理器多了一个 node 进程 / 临时目录里有 dsh-files-git-service-*.json？**
+正常——面板的 git 操作运行在独立服务进程（不占 DSH 主进程资源），空闲
+30 分钟自动退出，运行时文件随进程清理。文件名含配置指纹（不同配置的
+DSH 实例各有独立服务，互不干扰）。删除该文件或进程都安全：面板会在
+下次操作时自动重新拉起。
+
 **Q：局域网其他设备访问 WebUI 时 Git 操作被拒绝？**
-预期行为——`/git-api` 仅信任回环来源。请在本机浏览器访问，或为远端访问配置
-SSH 隧道等回环转发。
+默认绑定（`--host 127.0.0.1`）下预期如此——`/git-api` 信任围栏只认回环。
+要在局域网使用面板，用 DSH 官方姿势：`dsh --profile web --host 0.0.0.0`，
+启动控制台会打印带 token 的 LAN URL，首次打开换发长期会话 Cookie，围栏
+自动信任本机 IP 字面量（主机名访问需另加 `--trusted-host`）。此后面板在
+非回环来源自动切换为纯代理模式：git 读、写全部可用，状态刷新走轮询；
+sidecar 服务始终只绑服务器本机回环，随机端口无需也不应暴露。
 
 **Q：编辑按钮点不动 / 加载失败？**
 「面板内编辑」依赖 CDN（esm.sh / jsdelivr）懒加载 CodeMirror，离线时不可用；

@@ -25,3 +25,4 @@ desktop.ini
 *.log
 *.tmp
 .cache/
+.dsh-vision-router

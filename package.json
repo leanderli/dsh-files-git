@@ -1,6 +1,6 @@
 {
   "name": "dsh-files-git",
-  "version": "0.1.0",
+  "version": "0.5.13",
   "description": "Workspace files & git panel for the dsh Web UI: browse workspace files + git operations (fetch/pull/commit/push)",
   "private": true,
   "type": "module",
@@ -22,6 +22,10 @@
     "web-ui"
   ],
   "main": "lib/index.js",
+  "scripts": {
+    "build": "node lib/build.cjs --rebuild",
+    "test:e2e": "node scripts/e2e.mjs"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
@@ -35,5 +39,8 @@
       "patch": "cordis.patch.yml"
     }
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "monaco-editor": "^0.56.0"
+  }
 }
