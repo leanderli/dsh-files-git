@@ -17,13 +17,19 @@
  *       test for the runtime-file singleton fight)
  *   10. runtime files exist, one per fingerprint, distinct paths
  *   11. self-heal: killed sidecar → next RPC respawns a fresh pid
+ *   12. raw file channel: /files/upload (bytes round-trip, overwrite 409 →
+ *       overwrite=1, traversal/illegal-name/missing-parent rejection),
+ *       /files/download (byte-equal + RFC 5987 headers, traversal reject),
+ *       exportZip + /files/export (central-directory parse, inflate, CRC,
+ *       UTF-8 names, explicit dir entry), token gate, host route wiring
  *
  * Run: node scripts/e2e.mjs
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import * as host from "../lib/index.js";
 import { configFingerprint, runtimeFilePath } from "../lib/server/shared.js";
 
@@ -46,9 +52,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function makeHost(config) {
 	let handler = null;
+	const rawRoutes = [];
 	const ctx = {
-		connection: { register: (_self, _channel, fn) => { handler = fn; } },
-		webServer: {}
+		// cordis ctx.effect runs the registration callback immediately and
+		// keeps its return value as the disposer — same call shape as the
+		// real host.
+		effect: (fn) => fn(),
+		connection: {
+			register: (_self, _channel, fn) => { handler = fn; },
+			requestRejection: () => undefined   // the raw channel's fence, stubbed for direct handler checks
+		},
+		webServer: { register: (route) => { rawRoutes.push(route); return () => {}; } }
 	};
 	host.apply(ctx, config);
 	return {
@@ -57,7 +71,8 @@ function makeHost(config) {
 			const out = await handler(endpoint, payload, ac.signal);
 			if (!out || typeof out !== "object" || !("ok" in out)) throw new Error(`bad RpcResult for ${endpoint}`);
 			return out;
-		}
+		},
+		rawRoutes
 	};
 }
 
@@ -219,6 +234,110 @@ async function main() {
 		const st2 = await directCall(infoA4.value, "status", { repo });
 		const st2Json = await st2.json();
 		check("11b. respawned sidecar serves status", st2.status === 200 && st2Json.ok && st2Json.value.branch === "main");
+
+		// ── 12: raw file channel (upload / download / exportZip) ─────────────
+		check("12a. host registers the /git-api-files raw route", hostA.rawRoutes.some((r) => r.kind === "prefix" && r.path === "/git-api-files"));
+		const filesUrl = (route, params) => `http://127.0.0.1:${infoA4.value.port}/files/${route}?${new URLSearchParams(params).toString()}`;
+		const filesAuth = { authorization: `Bearer ${infoA4.value.token}` };
+		const noAuthFiles = await fetch(filesUrl("download", { repo, path: "a.txt" }));
+		check("12b. files channel missing token → 401", noAuthFiles.status === 401);
+
+		const upPayload = Buffer.from("upload-payload-你好\n", "utf8");
+		const up = await fetch(filesUrl("upload", { repo, path: "uploaded 文件.txt" }), { method: "POST", headers: { ...filesAuth, "content-type": "application/octet-stream" }, body: upPayload });
+		const upJson = await up.json().catch(() => null);
+		check("12c. upload writes bytes (UTF-8 name)", up.status === 200 && upJson?.ok === true && upJson?.value?.size === upPayload.length, JSON.stringify(upJson)?.slice(0, 200));
+		check("12d. uploaded bytes round-trip on disk", readFileSync(join(repo, "uploaded 文件.txt")).equals(upPayload));
+
+		const upDup = await fetch(filesUrl("upload", { repo, path: "uploaded 文件.txt" }), { method: "POST", headers: { ...filesAuth, "content-type": "application/octet-stream" }, body: upPayload });
+		check("12e. duplicate upload without overwrite → 409", upDup.status === 409);
+		const upOvr = await fetch(filesUrl("upload", { repo, path: "uploaded 文件.txt", overwrite: "1" }), { method: "POST", headers: { ...filesAuth, "content-type": "application/octet-stream" }, body: Buffer.from("overwritten\n", "utf8") });
+		check("12f. duplicate upload with overwrite=1 → 200", upOvr.status === 200 && (await upOvr.json())?.ok === true);
+		check("12g. overwritten content on disk", readFileSync(join(repo, "uploaded 文件.txt"), "utf8") === "overwritten\n");
+
+		const upEscape = await fetch(filesUrl("upload", { repo, path: "../escape.txt" }), { method: "POST", headers: { ...filesAuth }, body: "x" });
+		check("12h. upload path traversal rejected", upEscape.status === 400);
+		const upColon = await fetch(filesUrl("upload", { repo, path: "a:bad.txt" }), { method: "POST", headers: { ...filesAuth }, body: "x" });
+		check("12i. upload illegal filename rejected", upColon.status === 400);
+		const upNoDir = await fetch(filesUrl("upload", { repo, path: "no-such-dir/x.txt" }), { method: "POST", headers: { ...filesAuth }, body: "x" });
+		check("12j. upload into missing parent dir rejected", upNoDir.status === 400);
+
+		const dl = await fetch(filesUrl("download", { repo, path: "a.txt" }), { headers: filesAuth });
+		const dlBytes = Buffer.from(await dl.arrayBuffer());
+		check("12k. download streams the file back", dl.status === 200 && dlBytes.equals(Buffer.from("hello\n", "utf8")));
+		check("12l. download attachment headers (RFC 5987)", (dl.headers.get("content-disposition") ?? "").includes("attachment") && (dl.headers.get("content-disposition") ?? "").includes("filename*=UTF-8''a.txt"));
+		const dlEscape = await fetch(filesUrl("download", { repo, path: "../outside.txt" }), { headers: filesAuth });
+		check("12m. download path traversal rejected", dlEscape.status === 400);
+
+		mkdirSync(join(repo, "sub"), { recursive: true });
+		writeFileSync(join(repo, "sub", "nested.txt"), "nested-content\n", "utf8");
+		const ex = await directCall(infoA4.value, "exportZip", { repo, paths: ["a.txt", "uploaded 文件.txt", "sub"] });
+		const exJson = await ex.json();
+		const exVal = exJson?.value;
+		check("12n. exportZip builds an archive", ex.status === 200 && exJson.ok === true && typeof exVal?.exportId === "string" && exVal.fileCount === 3 && exVal.dirCount === 1, JSON.stringify(exJson)?.slice(0, 240));
+		const zipRes = await fetch(filesUrl("export", { id: exVal.exportId }), { headers: filesAuth });
+		const zipBuf = Buffer.from(await zipRes.arrayBuffer());
+		check("12o. export download streams the zip", zipRes.status === 200 && zipBuf.length > 0 && (zipRes.headers.get("content-disposition") ?? "").includes(".zip"));
+		const missingExport = await fetch(filesUrl("export", { id: "deadbeef" }), { headers: filesAuth });
+		check("12p. unknown export id → 404", missingExport.status === 404);
+
+		// Minimal ZIP reader: EOCD → central directory → per-entry inflate +
+		// CRC verification against a local crc32 implementation.
+		const CRC_TABLE = (() => {
+			const table = new Int32Array(256);
+			for (let n = 0; n < 256; n++) {
+				let c = n;
+				for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+				table[n] = c;
+			}
+			return table;
+		})();
+		const crc32Of = (buf) => {
+			let c = 0xFFFFFFFF;
+			for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+			return (c ^ 0xFFFFFFFF) >>> 0;
+		};
+		function readZip(buf) {
+			let eocd = -1;
+			for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xFFFF); i--) {
+				if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+			}
+			if (eocd === -1) throw new Error("EOCD not found");
+			const count = buf.readUInt16LE(eocd + 10);
+			const cdOffset = buf.readUInt32LE(eocd + 16);
+			const entries = [];
+			let at = cdOffset;
+			for (let k = 0; k < count; k++) {
+				if (buf.readUInt32LE(at) !== 0x02014b50) throw new Error("bad central directory entry");
+				const flags = buf.readUInt16LE(at + 8);
+				const method = buf.readUInt16LE(at + 10);
+				const crc = buf.readUInt32LE(at + 16);
+				const csize = buf.readUInt32LE(at + 20);
+				const nameLen = buf.readUInt16LE(at + 28);
+				const extraLen = buf.readUInt16LE(at + 30);
+				const commentLen = buf.readUInt16LE(at + 32);
+				const localOffset = buf.readUInt32LE(at + 42);
+				const name = buf.subarray(at + 46, at + 46 + nameLen).toString("utf8");
+				const localNameLen = buf.readUInt16LE(localOffset + 26);
+				const localExtraLen = buf.readUInt16LE(localOffset + 28);
+				const dataAt = localOffset + 30 + localNameLen + localExtraLen;
+				const data = buf.subarray(dataAt, dataAt + csize);
+				const plain = method === 8 ? inflateRawSync(data) : Buffer.from(data);
+				entries.push({ name, flags, method, crc, plain });
+				at += 46 + nameLen + extraLen + commentLen;
+			}
+			return { count, entries };
+		}
+		const zip = readZip(zipBuf);
+		const zipNames = zip.entries.map((e) => e.name).sort();
+		check("12q. zip entries match the selection (dir structure kept)", zip.count === 4 && zipNames.join("|") === ["a.txt", "sub/", "sub/nested.txt", "uploaded 文件.txt"].join("|"), zipNames.join(","));
+		const aEntry = zip.entries.find((e) => e.name === "a.txt");
+		check("12r. zip entry content + CRC verified", Boolean(aEntry) && aEntry.plain.equals(Buffer.from("hello\n", "utf8")) && aEntry.crc === crc32Of(Buffer.from("hello\n", "utf8")));
+		const nestedEntry = zip.entries.find((e) => e.name === "sub/nested.txt");
+		check("12s. zip nested file content verified", Boolean(nestedEntry) && nestedEntry.plain.equals(Buffer.from("nested-content\n", "utf8")));
+		const uploadedEntry = zip.entries.find((e) => e.name === "uploaded 文件.txt");
+		check("12t. zip UTF-8 entry name round-trips", Boolean(uploadedEntry) && uploadedEntry.plain.equals(Buffer.from("overwritten\n", "utf8")));
+		const dirEntry = zip.entries.find((e) => e.name === "sub/");
+		check("12u. explicit directory entry present", Boolean(dirEntry) && dirEntry.method === 0 && (dirEntry.flags & 0x0800) !== 0);
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});
