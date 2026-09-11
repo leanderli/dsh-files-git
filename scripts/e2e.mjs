@@ -409,6 +409,16 @@ async function main() {
 		const litter = readdirSync(repo).filter((n) => /^\.dshup-[0-9a-f]{8}$/.test(n));
 		check("13a. aborted upload leaves no .dshup-* temp litter", litter.length === 0, litter.join(","));
 		check("13b. aborted upload never published the target", !existsSync(join(repo, "aborted-upload.bin")));
+
+		// ── 14: non-ASCII paths come back RAW from status ─────────────────────
+		// (regression: -c core.quotePath=false must reach every git call — with
+		// git's default, "uploaded 文件.txt" arrives octal-escaped and quoted
+		// ("uploaded \346\226\207…txt") and the change list displays that
+		// verbatim; LC_ALL=C in the sidecar makes the default escape certain)
+		const stRaw = await directCall(infoA4.value, "status", { repo });
+		const stRawJson = await stRaw.json();
+		const stFlat = JSON.stringify(stRawJson?.value ?? {});
+		check("14. status returns raw UTF-8 paths (no quotePath escaping)", stRawJson.ok === true && stFlat.includes("uploaded 文件.txt") && !stFlat.includes("\\346"), stFlat.slice(0, 160));
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});
