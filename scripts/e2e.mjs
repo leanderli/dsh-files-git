@@ -86,11 +86,20 @@ function killTree(pid) {
 }
 
 async function directCall(info, endpoint, payload, { method = "POST", headers = {}, body } = {}) {
-	return fetch(`http://127.0.0.1:${info.port}/git/${encodeURIComponent(endpoint)}`, {
+	// One transport-level retry, mirroring the client's read-class retry: git
+	// process storms (branch switches, merges in earlier sections) can
+	// transiently reset a loopback connection — the NEXT request recovers.
+	const doFetch = () => fetch(`http://127.0.0.1:${info.port}/git/${encodeURIComponent(endpoint)}`, {
 		method,
 		headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json", ...headers },
 		body: body ?? (payload === undefined ? undefined : JSON.stringify(payload))
 	});
+	try {
+		return await doFetch();
+	} catch (error) {
+		await sleep(300);
+		return doFetch();
+	}
 }
 
 async function main() {
@@ -419,6 +428,25 @@ async function main() {
 		const stRawJson = await stRaw.json();
 		const stFlat = JSON.stringify(stRawJson?.value ?? {});
 		check("14. status returns raw UTF-8 paths (no quotePath escaping)", stRawJson.ok === true && stFlat.includes("uploaded 文件.txt") && !stFlat.includes("\\346"), stFlat.slice(0, 160));
+
+		// ── 15: log exposes parents for the git graph ──────────────────────────
+		// A real merge commit must carry BOTH parents (the client lane
+		// algorithm draws fan-out from %P alone).
+		git(repo, "checkout", "-b", "graph-side");
+		writeFileSync(join(repo, "graph-side.txt"), "side\n", "utf8");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "graph side commit");
+		git(repo, "checkout", "main");
+		writeFileSync(join(repo, "graph-main.txt"), "main\n", "utf8");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "graph main commit");
+		git(repo, "merge", "--no-ff", "graph-side", "-m", "graph merge commit");
+		const lg = await directCall(infoA4.value, "log", { repo, count: 10 });
+		const lgJson = await lg.json();
+		const lgLines = lgJson?.value?.lines ?? [];
+		const mergeEntry = lgLines.find((l) => l.subject === "graph merge commit");
+		const firstLinear = lgLines.find((l) => l.subject === "graph main commit");
+		check("15. log returns parents (merge has two, linear has one)", lgJson.ok === true && Array.isArray(mergeEntry?.parents) && mergeEntry.parents.length === 2 && Array.isArray(firstLinear?.parents) && firstLinear.parents.length === 1, JSON.stringify(lgLines.slice(0, 3)).slice(0, 240));
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});
