@@ -52,11 +52,12 @@ file and version-control work happens without ever leaving the WebUI.
   a Preview/Source toggle renders Markdown and syntax-highlights code (chunked
   async rendering for large files — never blocks the main thread); files open
   in Source view by default;
-- **In-panel editing**: a CodeMirror 6 editor with automatic language matching
-  for 16 languages (js/ts/jsx/tsx/vue/json/md/py/java/go/rs/c/cpp/php/sql/yaml/scss, …),
+- **In-panel editing**: a Monaco editor with automatic language matching,
   following the DSH light/dark theme; saving writes back to disk and refreshes
-  Git status; the editor core and language packs lazy-load from CDN
-  (esm.sh first, jsdelivr fallback, with retries) — zero bundle-size cost;
+  Git status. The editor is hosted locally by the sidecar process
+  (`/vendor/monaco` static assets) — no CDN, works offline; when Monaco is
+  unavailable the view degrades to plain text and the "open in editor"
+  fallback remains;
 - **Quick actions**: hover any entry to **reveal in file explorer**, **copy path**,
   or **copy name**; breadcrumb segments are clickable, with a "Open directory"
   button on the far right.
@@ -121,8 +122,8 @@ file and version-control work happens without ever leaving the WebUI.
 - Stable references + `React.memo`: `useGit` results, change rows, file rows,
   history blocks, diff cards and the panel shell compare by content — polling
   or a single checkbox rebuilds only the affected rows;
-- Lazy loading: the CodeMirror core + language packs fetch from CDN on first
-  "Edit" click;
+- Lazy loading: the Monaco editor loads from the sidecar's local
+  `/vendor/monaco` route on first "Edit" click (no CDN involved);
 - Highlight/Markdown results memoized per preview content — dragging dividers
   never re-runs them;
 - Scroll isolation via `contain: content` on list/preview/diff containers;
@@ -136,7 +137,7 @@ file and version-control work happens without ever leaving the WebUI.
 | [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) | `dsh web` (Web UI mode, `--profile web`) |
 | Git | A `git` on `PATH` (or an absolute path via [configuration](#configuration)); 2.30+ recommended (`--force-with-lease` / `restore --staged`) |
 | Browser | A modern Chromium / Firefox / Safari (the panel uses `backdrop-filter`, `color-mix`) |
-| Network (optional) | Only the first use of in-panel editing needs esm.sh / jsdelivr for CodeMirror; offline keeps the "open in editor" fallback |
+| Network (optional) | Not required for in-panel editing — Monaco is served locally by the sidecar; CDN only benefits nothing here |
 
 ## Installation (standard flow)
 
@@ -189,7 +190,7 @@ dsh web
    targets the current session's workspace directory automatically (no manual
    path) and follows session/workspace switches.
 2. **Files tab**: click directories to expand; click files to preview; the
-   preview header toggles Preview/Source, **Edit** (CodeMirror) and
+   preview header toggles Preview/Source, **Edit** (Monaco) and
    **Open in editor** (system default app); `.git` is hidden by default.
 3. **Git tab**:
    - Stage: check change files (or directory rows / select-all) → Commit all / Commit selected;
@@ -233,10 +234,18 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
 
 ## Security Model
 
-- **Loopback fence**: the `/git-api` channel registers with
-  `authority: "loopback"` behind the same browser trust fence as `/api` — only
-  loopback origins (127.0.0.1 / localhost) may call it; LAN-origin requests
-  are rejected;
+- **Loopback fence**: the `/git-api` channel is fenced by the DSH connection
+  service's request rejection (`requestRejection`: Host/Origin trust + browser
+  cookie auth) — the same trust fence as `/api`; only loopback origins
+  (127.0.0.1 / localhost) may call it; LAN-origin requests are rejected;
+- **Dedicated service fence**: git / file operations run in a separate service
+  process bound to a random `127.0.0.1` port; every request must carry a
+  random Bearer token (distributed through the loopback-fenced bootstrap
+  channel `/git-api/service-info`; the runtime file lives under the user's
+  home directory `~/.dsh-files-git/`, per-user isolated — never in a shared
+  temp dir). Tokenless requests get 401. Direct-browser mode echoes CORS for
+  loopback origins only; a LAN-served WebUI gets no CORS grant, falls back to
+  the DSH proxy path and is rejected by the loopback fence (fail-closed);
 - **Workspace confinement**: file browsing (`list` / `read` / the relative-path
   branch of `write`) is confined to the workspace root — `resolve` + `realpath`
   double containment checks reject `..`, absolute paths and symlink escapes;
@@ -254,11 +263,25 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
 ### Architecture
 
 - **Host half** (`lib/index.js`): registers `POST /git-api/*` RPC endpoints
-  over the shared `connection` channel; runs git commands and file browsing;
-  zero runtime dependencies;
+  over the shared `connection` channel; acts as **lifecycle manager + loopback
+  proxy**: spawns / reuses the dedicated service process (singleton runtime
+  file under `~/.dsh-files-git/` + health checks; automatic rotation on
+  version/config change) and hands its port + token to the panel via
+  `/git-api/service-info` (bootstrap for direct mode); zero runtime
+  dependencies;
+- **Service process** (`lib/server/server.js`): a standalone Node process
+  (reusing DSH's Node binary) that actually runs git commands and file
+  browsing — git never occupies the DSH main process's event loop; built-in
+  concurrency caps, git process-tree management and a 30-minute idle
+  self-exit; also serves `GET /events` SSE status push (debounced fs.watch +
+  10s fallback polling, ≤4 concurrent streams) and the token-free loopback
+  `/vendor/monaco` static route; zero runtime dependencies;
 - **Browser half** (`lib/client.js`): a self-contained React panel registered
   into `conversation.session.header.utilities` (header button),
   `conversation.input.dock` (blank-session button) and `shell.overlay` (modal layer).
+  Adaptive transport: with service-info it goes **direct** to the service
+  (CORS allowlist of loopback origins only), otherwise it falls back to the
+  DSH proxy path; status is SSE-driven with automatic polling fallback.
 
 ### Source layout
 
@@ -281,7 +304,7 @@ lib/
     triggers.js   header button + blank-session ghost trigger
     hooks.js      useGit (state/actions/polling)
     diffutil.js   diff parsing + LCS word-level highlight
-    editor.js     CodeMirror 6 editor (CDN lazy-load: core + 16 language packs + one-dark)
+    monaco.js     Monaco editor (sidecar-hosted /vendor/monaco; shared by edit + diff)
     ui.js         memoized sub-views (change rows/history/diff panes)
     gitview.js    branch selector/confirm dialog/Git tab
     filebrowser.js file browser/search/preview/settings
@@ -331,14 +354,31 @@ A known Windows DLL-initialization hiccup under heavy git-process concurrency;
 the host already retries once automatically. If it persists, pin `gitPath`
 via [configuration](#configuration).
 
-**Q: Git operations are rejected when the WebUI is accessed from another device on the LAN?**
-Expected — `/git-api` trusts loopback origins only. Access from the local
-machine, or tunnel (e.g. SSH port-forward) to loopback for remote use.
+**Q: There is an extra node process in Task Manager / dsh-files-git-service-*.json files under ~/.dsh-files-git?**
+Normal — the panel's git operations run in a dedicated service process (not on
+the DSH main process), which self-exits after 30 minutes idle. The runtime file
+and export cache live under `~/.dsh-files-git/` in the user home (no longer in
+a shared temp dir). The file name embeds a config fingerprint (differently
+configured DSH instances each get their own service). Deleting the file or
+killing the process is safe: the panel respawns it on the next operation.
 
-**Q: The Edit button is disabled / loading fails?**
-In-panel editing lazy-loads CodeMirror from CDN (esm.sh / jsdelivr) and is
-unavailable offline; the "open in editor" fallback remains. Binary files and
-read-truncated (>512KB) files are not editable.
+**Q: Git operations are rejected when the WebUI is accessed from another device on the LAN?**
+Expected with the default bind (`--host 127.0.0.1`) — the `/git-api` trust
+fence accepts loopback only. To use the panel over the LAN, use the official
+DSH posture: `dsh --profile web --host 0.0.0.0`; the startup console prints a
+token-bearing LAN URL, the first open exchanges it for a long-lived session
+cookie, and the fence automatically trusts literal machine IPs (hostname
+access additionally needs `--trusted-host`). The panel then switches to pure
+proxy mode for non-loopback origins: git read/write fully work, status
+refresh falls back to polling; the sidecar itself only ever binds the server
+machine's loopback — its random port should not (and need not) be exposed.
+
+**Q: Editing / the diff view fails to load?**
+Both use the Monaco editor, hosted locally by the sidecar (`/vendor/monaco`,
+token-free, loopback-only) — **offline works**, no CDN is involved. When
+Monaco is unavailable (load failure, direct-mode restrictions on non-loopback
+pages) the view degrades to plain text, and the "open in editor" fallback
+remains. Binary files and read-truncated (>512KB) files are not editable.
 
 ## Contributing
 

@@ -22,6 +22,9 @@
  *       /files/download (byte-equal + RFC 5987 headers, traversal reject),
  *       exportZip + /files/export (central-directory parse, inflate, CRC,
  *       UTF-8 names, explicit dir entry), token gate, host route wiring
+ *   16. malformed request-target (`GET //:80`) → 400, sidecar survives
+ *   17. rev option-injection rejected (`--output=`), legit revs still work
+ *   18. /vendor: no-token serving + traversal fenced + 404s
  *
  * Run: node scripts/e2e.mjs
  */
@@ -30,6 +33,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect as netConnect } from "node:net";
 import { inflateRawSync } from "node:zlib";
 import * as host from "../lib/index.js";
 import { configFingerprint, runtimeFilePath } from "../lib/server/shared.js";
@@ -415,7 +419,9 @@ async function main() {
 		setTimeout(() => abortCtl.abort(), 250);
 		await abortFetch;
 		await sleep(400);   // let the sidecar's error path unlink the temp
-		const litter = readdirSync(repo).filter((n) => /^\.dshup-[0-9a-f]{8}$/.test(n));
+		// The temp form is `<target>.dshup-<hex>` (SUFFIX match — an anchored
+		// ^\.dshup regex here once made this assertion vacuously pass).
+		const litter = readdirSync(repo).filter((n) => /\.dshup-[0-9a-f]{8}$/.test(n));
 		check("13a. aborted upload leaves no .dshup-* temp litter", litter.length === 0, litter.join(","));
 		check("13b. aborted upload never published the target", !existsSync(join(repo, "aborted-upload.bin")));
 
@@ -447,6 +453,60 @@ async function main() {
 		const mergeEntry = lgLines.find((l) => l.subject === "graph merge commit");
 		const firstLinear = lgLines.find((l) => l.subject === "graph main commit");
 		check("15. log returns parents (merge has two, linear has one)", lgJson.ok === true && Array.isArray(mergeEntry?.parents) && mergeEntry.parents.length === 2 && Array.isArray(firstLinear?.parents) && firstLinear.parents.length === 1, JSON.stringify(lgLines.slice(0, 3)).slice(0, 240));
+
+		// ── 16: malformed request-target must 400, never crash ────────────────
+		// (regression: `GET //:80` threw inside new URL() BEFORE the token
+		// gate; the unhandled rejection killed the whole sidecar — an
+		// unauthenticated local DoS.)
+		const malformedStatus = await new Promise((resolveMal) => {
+			const sock = netConnect(infoA4.value.port, "127.0.0.1", () => {
+				sock.write("GET //:80 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+			});
+			let head = "";
+			sock.on("data", (d) => { head += d.toString("latin1"); });
+			sock.on("error", () => resolveMal(null));
+			sock.on("close", () => resolveMal(/^HTTP\/1\.[01] (\d{3})/.exec(head)?.[1] ?? null));
+		});
+		check("16a. malformed request-target answers 400 (not a crash)", malformedStatus === "400", `status=${malformedStatus}`);
+		const afterMal = await directCall(infoA4.value, "status", { repo });
+		const afterMalJson = await afterMal.json();
+		check("16b. sidecar still alive after malformed request", afterMalJson.ok === true, JSON.stringify(afterMalJson).slice(0, 120));
+
+		// ── 17: rev-shaped params reject option injection ─────────────────────
+		// (regression: `show --output=<path>` placed user input before `--`,
+		// letting a token holder turn "view a commit" into an arbitrary
+		// file-write primitive.)
+		const pwnPath = join(repo, "rev-inject-pwned.txt");
+		const showInject = await directCall(infoA4.value, "show", { repo, target: `--output=${pwnPath}`, path: "a.txt" });
+		const showInjectJson = await showInject.json();
+		check("17a. show rejects option-shaped rev (invalid-rev)", showInjectJson.ok === false && showInjectJson.error?.code === "invalid-rev", JSON.stringify(showInjectJson).slice(0, 160));
+		check("17b. injected --output file was NOT written", !existsSync(pwnPath));
+		const resetInject = await directCall(infoA4.value, "reset", { repo, target: "--output=" + join(repo, "reset-pwned.txt"), mode: "soft" });
+		const resetInjectJson = await resetInject.json();
+		check("17c. reset rejects option-shaped rev", resetInjectJson.ok === false && resetInjectJson.error?.code === "invalid-rev", JSON.stringify(resetInjectJson).slice(0, 160));
+		const showOk = await directCall(infoA4.value, "show", { repo, target: mergeEntry.hash });
+		const showOkJson = await showOk.json();
+		check("17d. legitimate rev (full hash) still works", showOkJson.ok === true && Array.isArray(showOkJson.value?.files), JSON.stringify(showOkJson).slice(0, 120));
+
+		// ── 18: /vendor serves without token; traversal fenced ────────────────
+		const vendorUrl = (p) => `http://127.0.0.1:${infoA4.value.port}/vendor/${p}`;
+		const vOk = await fetch(vendorUrl("monaco/vs/loader.js"));
+		check("18a. vendor asset served without token (Monaco loader)", vOk.status === 200 && /javascript/.test(vOk.headers.get("content-type") ?? ""), `status=${vOk.status} type=${vOk.headers.get("content-type")}`);
+		check("18b. vendor response carries content-length (streamed, not buffered blindly)", Number(vOk.headers.get("content-length") ?? 0) > 0);
+		// Traversal fencing, two layers:
+		// (a) `%2e%2e`-style segments are normalized away by WHATWG URL
+		//     parsing (client AND server re-parse alike) — the path falls out
+		//     of /vendor/ entirely and dies at the TOKEN gate: 401, fail-closed,
+		//     no bytes served.
+		// (b) `..%2F`-style (encoded SEPARATOR) survives URL parsing as one
+		//     segment but decodes to ../ inside handleVendor — this is the
+		//     case the resolve+startsWith fence exists for: 403.
+		const vEscapeNorm = await fetch(vendorUrl("%2e%2e/package.json"));
+		check("18c. vendor traversal (normalizable) fail-closed 401", vEscapeNorm.status === 401, `status=${vEscapeNorm.status}`);
+		const vEscape = await fetch(vendorUrl("..%2Fpackage.json"));
+		check("18c2. vendor traversal (encoded separator) rejected 403", vEscape.status === 403, `status=${vEscape.status}`);
+		const vMissing = await fetch(vendorUrl("monaco/vs/no-such-file.js"));
+		check("18d. vendor missing asset 404s", vMissing.status === 404, `status=${vMissing.status}`);
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});

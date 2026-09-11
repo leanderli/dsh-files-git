@@ -7,6 +7,14 @@
 #                skipping `.git-ai` shim dirs)
 #   defaultRoot: repository directory used when the client sends no repo
 #                (normally the panel sends the session's workspace cwd)
+#   caps:        transfer size caps for the sidecar, e.g.
+#                  caps:
+#                    uploadBytes: 104857600    # per-upload limit (default 100MB;
+#                                            # 0/negative disables the cap)
+#                    exportBytes: 209715200    # zip export limit (default 200MB)
+#                Changing caps rotates the sidecar (they are part of its
+#                config fingerprint), so a stale service never enforces old
+#                limits.
 - insert:
     - id: files-git
       name: 'dsh-files-git'
