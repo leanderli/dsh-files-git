@@ -27,7 +27,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -313,6 +313,7 @@ async function main() {
 				const method = buf.readUInt16LE(at + 10);
 				const crc = buf.readUInt32LE(at + 16);
 				const csize = buf.readUInt32LE(at + 20);
+				const usize = buf.readUInt32LE(at + 24);
 				const nameLen = buf.readUInt16LE(at + 28);
 				const extraLen = buf.readUInt16LE(at + 30);
 				const commentLen = buf.readUInt16LE(at + 32);
@@ -323,7 +324,7 @@ async function main() {
 				const dataAt = localOffset + 30 + localNameLen + localExtraLen;
 				const data = buf.subarray(dataAt, dataAt + csize);
 				const plain = method === 8 ? inflateRawSync(data) : Buffer.from(data);
-				entries.push({ name, flags, method, crc, plain });
+				entries.push({ name, flags, method, crc, csize, usize, plain });
 				at += 46 + nameLen + extraLen + commentLen;
 			}
 			return { count, entries };
@@ -340,8 +341,21 @@ async function main() {
 		const dirEntry = zip.entries.find((e) => e.name === "sub/");
 		check("12u. explicit directory entry present", Boolean(dirEntry) && dirEntry.method === 0 && (dirEntry.flags & 0x0800) !== 0);
 
-		// ── 12v-12y: review regression tests ─────────────────────────────────
-		// 12v drives the REGISTERED host raw route through a real HTTP server
+		// 12v: an EMPTY directory survives as an explicit entry (regression
+		// guard for the dir-entry emission path, distinct from 12u's populated dir).
+		mkdirSync(join(repo, "empty-dir"), { recursive: true });
+		const exEmpty = await directCall(infoA4.value, "exportZip", { repo, paths: ["empty-dir"] });
+		const exEmptyJson = await exEmpty.json();
+		let emptyZipOk = false;
+		if (exEmptyJson?.ok === true) {
+			const zipEmptyRes = await fetch(filesUrl("export", { id: exEmptyJson.value.exportId }), { headers: filesAuth });
+			const zipEmpty = readZip(Buffer.from(await zipEmptyRes.arrayBuffer()));
+			emptyZipOk = zipEmpty.count === 1 && zipEmpty.entries[0]?.name === "empty-dir/" && zipEmpty.entries[0]?.usize === 0;
+		}
+		check("12v. empty directory survives as an explicit zip entry", emptyZipOk, JSON.stringify(exEmptyJson).slice(0, 120));
+
+		// ── 12w-12z: review regression tests ─────────────────────────────────
+		// 12w drives the REGISTERED host raw route through a real HTTP server
 		// with the CLIENT-shaped URL — the proxy path every non-loopback page
 		// takes (regression: /git-api-files/files/<route> used to 404 because
 		// the client glued an extra /files segment onto the proxy base).
@@ -351,26 +365,50 @@ async function main() {
 		const proxyPort = proxySrv.address().port;
 		const proxyDl = await fetch(`http://127.0.0.1:${proxyPort}/git-api-files/download?${new URLSearchParams({ repo, path: "a.txt" })}`);
 		const proxyDlBytes = Buffer.from(await proxyDl.arrayBuffer());
-		check("12v. proxy route serves the client-shaped URL (byte round-trip)", proxyDl.status === 200 && proxyDlBytes.equals(Buffer.from("hello\n", "utf8")), `status=${proxyDl.status} body=${proxyDlBytes.toString("utf8").slice(0, 60)}`);
+		check("12w. proxy route serves the client-shaped URL (byte round-trip)", proxyDl.status === 200 && proxyDlBytes.equals(Buffer.from("hello\n", "utf8")), `status=${proxyDl.status} body=${proxyDlBytes.toString("utf8").slice(0, 60)}`);
 		const proxyStale = await fetch(`http://127.0.0.1:${proxyPort}/git-api-files/files/download?${new URLSearchParams({ repo, path: "a.txt" })}`);
-		check("12w. stale /git-api-files/files/* shape rejected (404)", proxyStale.status === 404, `status=${proxyStale.status}`);
+		check("12x. stale /git-api-files/files/* shape rejected (404)", proxyStale.status === 404, `status=${proxyStale.status}`);
 		proxySrv.close();
 
-		// 12x: a caps-configured host must boot its sidecar — host and sidecar
+		// 12y: a caps-configured host must boot its sidecar — host and sidecar
 		// must agree on the runtime-file fingerprint (regression: the sidecar
 		// computed its fingerprint WITHOUT caps, so the host polled a runtime
 		// file that never appeared and every RPC failed the 8s boot window).
 		const hostCaps = makeHost({ maxUploadBytes: 1024 * 1024 });
 		const infoCaps = await hostCaps.rpc("service-info");
-		check("12x. caps-configured host boots its sidecar (fingerprint parity)", infoCaps.ok === true && infoCaps.value?.port > 0, JSON.stringify(infoCaps).slice(0, 160));
+		check("12y. caps-configured host boots its sidecar (fingerprint parity)", infoCaps.ok === true && infoCaps.value?.port > 0, JSON.stringify(infoCaps).slice(0, 160));
 		if (infoCaps.ok) {
 			shutdownUrls.push({ port: infoCaps.value.port, token: infoCaps.value.token });
-			// 12y: the configured cap actually reaches the upload route.
+			// 12z: the configured cap actually reaches the upload route.
 			const capsUrl = (route, params) => `http://127.0.0.1:${infoCaps.value.port}/files/${route}?${new URLSearchParams(params).toString()}`;
 			const bigPayload = Buffer.alloc(1024 * 1024 + 64, 7);
 			const upBig = await fetch(capsUrl("upload", { repo, path: "big.bin" }), { method: "POST", headers: { authorization: `Bearer ${infoCaps.value.token}`, "content-type": "application/octet-stream" }, body: bigPayload });
-			check("12y. configured upload cap enforced (413 over 1MB)", upBig.status === 413, `status=${upBig.status}`);
+			check("12z. configured upload cap enforced (413 over 1MB)", upBig.status === 413, `status=${upBig.status}`);
 		}
+
+		// ── 13: aborted upload leaves no temp litter ──────────────────────────
+		// A stalled body aborted mid-flight must clean up its .dshup-* temp and
+		// never publish the target file.
+		const abortCtl = new AbortController();
+		const slowBody = new ReadableStream({
+			start(controller) {
+				controller.enqueue(Buffer.alloc(64 * 1024));
+				// never close: the transfer stalls until the client aborts
+			}
+		});
+		const abortFetch = fetch(filesUrl("upload", { repo, path: "aborted-upload.bin" }), {
+			method: "POST",
+			headers: { ...filesAuth, "content-type": "application/octet-stream" },
+			body: slowBody,
+			signal: abortCtl.signal,
+			duplex: "half"
+		}).catch(() => "aborted");
+		setTimeout(() => abortCtl.abort(), 250);
+		await abortFetch;
+		await sleep(400);   // let the sidecar's error path unlink the temp
+		const litter = readdirSync(repo).filter((n) => /^\.dshup-[0-9a-f]{8}$/.test(n));
+		check("13a. aborted upload leaves no .dshup-* temp litter", litter.length === 0, litter.join(","));
+		check("13b. aborted upload never published the target", !existsSync(join(repo, "aborted-upload.bin")));
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});
