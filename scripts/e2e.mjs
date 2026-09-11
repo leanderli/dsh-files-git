@@ -26,6 +26,7 @@
  * Run: node scripts/e2e.mjs
  */
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -338,6 +339,38 @@ async function main() {
 		check("12t. zip UTF-8 entry name round-trips", Boolean(uploadedEntry) && uploadedEntry.plain.equals(Buffer.from("overwritten\n", "utf8")));
 		const dirEntry = zip.entries.find((e) => e.name === "sub/");
 		check("12u. explicit directory entry present", Boolean(dirEntry) && dirEntry.method === 0 && (dirEntry.flags & 0x0800) !== 0);
+
+		// ── 12v-12y: review regression tests ─────────────────────────────────
+		// 12v drives the REGISTERED host raw route through a real HTTP server
+		// with the CLIENT-shaped URL — the proxy path every non-loopback page
+		// takes (regression: /git-api-files/files/<route> used to 404 because
+		// the client glued an extra /files segment onto the proxy base).
+		const capturedRoute = hostA.rawRoutes.find((r) => r.kind === "prefix" && r.path === "/git-api-files");
+		const proxySrv = createServer((req, res) => { void capturedRoute.handler(req, res); });
+		await new Promise((resolve) => proxySrv.listen(0, "127.0.0.1", resolve));
+		const proxyPort = proxySrv.address().port;
+		const proxyDl = await fetch(`http://127.0.0.1:${proxyPort}/git-api-files/download?${new URLSearchParams({ repo, path: "a.txt" })}`);
+		const proxyDlBytes = Buffer.from(await proxyDl.arrayBuffer());
+		check("12v. proxy route serves the client-shaped URL (byte round-trip)", proxyDl.status === 200 && proxyDlBytes.equals(Buffer.from("hello\n", "utf8")), `status=${proxyDl.status} body=${proxyDlBytes.toString("utf8").slice(0, 60)}`);
+		const proxyStale = await fetch(`http://127.0.0.1:${proxyPort}/git-api-files/files/download?${new URLSearchParams({ repo, path: "a.txt" })}`);
+		check("12w. stale /git-api-files/files/* shape rejected (404)", proxyStale.status === 404, `status=${proxyStale.status}`);
+		proxySrv.close();
+
+		// 12x: a caps-configured host must boot its sidecar — host and sidecar
+		// must agree on the runtime-file fingerprint (regression: the sidecar
+		// computed its fingerprint WITHOUT caps, so the host polled a runtime
+		// file that never appeared and every RPC failed the 8s boot window).
+		const hostCaps = makeHost({ maxUploadBytes: 1024 * 1024 });
+		const infoCaps = await hostCaps.rpc("service-info");
+		check("12x. caps-configured host boots its sidecar (fingerprint parity)", infoCaps.ok === true && infoCaps.value?.port > 0, JSON.stringify(infoCaps).slice(0, 160));
+		if (infoCaps.ok) {
+			shutdownUrls.push({ port: infoCaps.value.port, token: infoCaps.value.token });
+			// 12y: the configured cap actually reaches the upload route.
+			const capsUrl = (route, params) => `http://127.0.0.1:${infoCaps.value.port}/files/${route}?${new URLSearchParams(params).toString()}`;
+			const bigPayload = Buffer.alloc(1024 * 1024 + 64, 7);
+			const upBig = await fetch(capsUrl("upload", { repo, path: "big.bin" }), { method: "POST", headers: { authorization: `Bearer ${infoCaps.value.token}`, "content-type": "application/octet-stream" }, body: bigPayload });
+			check("12y. configured upload cap enforced (413 over 1MB)", upBig.status === 413, `status=${upBig.status}`);
+		}
 	} finally {
 		for (const { port, token } of shutdownUrls) {
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => {});
