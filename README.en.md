@@ -40,101 +40,63 @@ file and version-control work happens without ever leaving the WebUI.
 
 ### File browsing & preview
 
-- **Lazy file tree**: expand/collapse directories with file sizes and Git status
-  badges (staged / modified / untracked / conflicted);
-- **Workspace-wide search**: git repositories are indexed via
-  `git ls-files --cached --others --exclude-standard` (respects `.gitignore`);
-  non-git directories fall back to filtering the current directory. Flat result
-  list, double-click to preview (deep nested files included);
-- **Search history**: keywords are recorded after a 1s pause (or Enter / blur);
-  reopen from the dropdown and clear at will;
-- **Content preview**: plain-text files render in full (no truncation under 512KB);
-  a Preview/Source toggle renders Markdown and syntax-highlights code (chunked
-  async rendering for large files — never blocks the main thread); files open
-  in Source view by default;
-- **In-panel editing**: a Monaco editor with automatic language matching,
-  following the DSH light/dark theme; saving writes back to disk and refreshes
-  Git status. The editor is hosted locally by the sidecar process
-  (`/vendor/monaco` static assets) — no CDN, works offline; when Monaco is
-  unavailable the view degrades to plain text and the "open in editor"
-  fallback remains;
-- **Quick actions**: hover any entry to **reveal in file explorer**, **copy path**,
-  or **copy name**; breadcrumb segments are clickable, with a "Open directory"
-  button on the far right.
+| Feature | Description |
+| --- | --- |
+| Lazy file tree | Expand/collapse directories with file sizes and Git status badges (staged / modified / untracked / conflicted); entries show full-color vscode-icons type icons (inlined at build time, zero runtime dependencies; unknown types fall back to a generic file glyph) |
+| Dual file panes | Two independently navigable panes; drag the divider to resize, double-click to reset; narrow viewports switch to a single pane (tap to drill in, "Back" returns from the preview) |
+| Workspace-wide search | Indexed via `git ls-files --cached --others --exclude-standard` (respects `.gitignore`); non-git directories fall back to filtering the current directory. Flat result list, double-click to preview (deep nested files included) |
+| Search history | Keywords are recorded after a 1s pause (or Enter / blur); reopen from the dropdown and clear at will |
+| Content preview | Plain-text files render in full (no truncation under 512KB); a Preview/Source toggle renders Markdown and syntax-highlights code (chunked async rendering, never blocks the main thread); HTML renders live in a sandboxed iframe (scripts run in an opaque origin, fully isolated from the panel); images / PDFs preview inline; Source view is the default |
+| In-panel editing | A Monaco editor (same engine as the diff view) with automatic language matching, following the DSH light/dark theme; saving writes back to disk and refreshes Git status; hosted locally by the sidecar (`/vendor/monaco`) — no CDN, works offline; degrades to plain text with an "open in editor" fallback when Monaco is unavailable |
+| Local upload | A hidden file picker uploads files sequentially into the current directory; existing targets ask "overwrite / cancel"; the listing refreshes in place when done |
+| Reference in composer | Every row carries an `@` button that inserts the entry as an `@path` mention into the composer (directories get a trailing slash) so the agent can zero in on it |
+| Quick actions | Hover: reveal in file explorer / copy path / copy name; row menu: download / delete (double-confirmed); multi-select bar: batch export / batch delete (double-confirmed) with select-all / deselect-all; breadcrumb segments are clickable, with an "Open directory" button on the far right |
 
 ![Browsing docs/screenshots with image preview](docs/screenshots/Snipaste_2026-08-20_22-37-26.png)
 *Image files preview inline, with open-in-browser / open-in-editor actions*
 
 ### Git operations
 
-- **Info bar**: current branch, ahead/behind counts as high-contrast capsules (⬆ push / ⬇ pull);
-- **Action bar**: pull (optional `--rebase`), push, fetch, force-push
-  (`--force-with-lease`, double-confirmed); each action shows a live output
-  module — progress while running, green on success, red on failure — kept
-  until dismissed;
-- **Branch selector**: all branches grouped current → local → remote (searchable);
-  checkout / merge / create-from / update / rename;
-- **Change list**: conflicted / staged / unstaged / untracked groups rendered as
-  a directory tree (aggregated counts; whole-directory stage / unstage /
-  untrack / track / ignore); untracked directories auto-expand into real file
-  lists; per-file stage / unstage / add-to-`.gitignore`; type-colored status
-  badges; **View all diffs** toggles between unstaged / staged;
-- **Diff preview**: click a change row to expand its diff on the right
-  (3:7 split, draggable divider, double-click to reset), word-level highlight
-  (LCS) + line coloring with graceful degradation for huge diffs; untracked
-  files render as all-green new-file diffs;
-- **Commit**: commit selected / commit all, optional `--amend`, `Ctrl+Enter` shortcut;
-- **History**: collapsed by default into an IDEA-style bar; expand into a
-  scrollable list; click a commit for the **detail view** (changed files + diff,
-  3:7 split); row menu offers **View changes** / **Revert commit** /
-  **Reset to commit** (soft/hard — dangerous ops double-confirmed);
-- **Auto refresh**: silent 5s polling (while the page is visible and idle),
-  snapshot-deduped, external changes never interrupt your current operation.
+| Feature | Description |
+| --- | --- |
+| Info bar | Current branch, ahead/behind counts as high-contrast capsules (push / pull) |
+| Action bar | Pull (optional `--rebase`), push, fetch, force-push (`--force-with-lease`, double-confirmed); each action shows a live output module — progress while running, green on success, red on failure — kept until dismissed |
+| Branch selector | All branches grouped current → local → remote (searchable); checkout / merge / create-from / update / rename |
+| Change list | Conflicted / staged / unstaged / untracked groups rendered as a directory tree (aggregated counts; whole-directory stage / unstage / untrack / track / ignore); untracked directories auto-expand into real file lists; per-file stage / unstage / add-to-`.gitignore`; type-colored status badges; **View all diffs** toggles between unstaged / staged |
+| Diff preview | Click a change row to expand its diff on the right (3:7 split, draggable divider, double-click to reset), word-level highlight (LCS) + line coloring with +added / −removed stats in the header and graceful degradation for huge diffs; untracked files render as all-green new-file diffs |
+| Commit | Commit selected / commit all, optional `--amend`, `Ctrl+Enter` shortcut |
+| History | Collapsed by default into an IDEA-style bar; expand into a scrollable list; click a commit for the detail view (changed files + diff); row menu: view changes / revert / reset to commit (soft/hard — dangerous ops double-confirmed) |
+| Auto refresh | Silent 5s polling (while the page is visible and idle), snapshot-deduped, external changes never interrupt your current operation |
 
 ### Panel experience
 
-- **Modal panel**: same interaction as the settings dialog; header button for
-  one-click fullscreen (fullscreen by default, configurable and persisted);
-- **Suspend**: the "suspend" (↑) button — or moving the mouse out — slides the
-  panel out of view, leaving a frosted handle at the top; hover to instantly
-  restore the full state (tab, preview, scroll, search, git status). Only
-  close (× / Esc) truly unmounts. The panel belongs to exactly one workspace
-  at a time;
-- **Artifact links → panel preview** (opt-in, off by default): when enabled,
-  clicking produced-file chips / file mentions in the conversation previews
-  them inside the panel instead of invoking a local app — in-workspace files
-  navigate to their directory; out-of-workspace files preview read-only by
-  absolute path (512KB cap);
-- **Frosted-glass visuals**: panel at 86% base color + `blur(30px)`, popovers
-  (search history, branch list, context menus) frosted too; theme-adaptive
-  text colors stay legible in light/dark skins;
-- **Focus trap & scroll lock**: Tab cycles inside the panel; wheel events don't
-  leak through; while a popover is open only it scrolls;
-- **Dual smart entry points**: once a session is engaged, the button sits in
-  the header bar (left of "Session log"); on a brand-new workspace with no
-  conversation yet (blank session) it automatically switches to a ghost button
-  at the right end of the row above the composer — strictly synchronized with
-  the header's visibility, never both at once.
+| Feature | Description |
+| --- | --- |
+| Modal panel | Same interaction as the settings dialog; header button for one-click fullscreen (fullscreen by default, configurable and persisted) |
+| Suspend | The "suspend" button — or moving the mouse out — slides the panel out of view, leaving a frosted handle at the top; hover to instantly restore the full state (tab, preview, scroll, search). Only close (× / Esc) truly unmounts. The panel belongs to exactly one workspace at a time |
+| Artifact links → panel preview | Opt-in (off by default): the plugin wraps DSH 0.1.5's `sidebarRight.openResource` non-invasively so produced-file chips / file mentions / tool file links open in the panel; unrecognized addresses fall through to the DSH default; in-workspace files navigate to their directory, out-of-workspace files preview read-only by absolute path (512KB cap) |
+| Settings page | DSH-style dropdowns with full keyboard navigation: editor theme (with a live light/dark side-by-side preview), open-fullscreen-by-default, produced-file click behavior; persisted in browser localStorage |
+| Frosted-glass visuals | Panel at 86% base color + `blur(30px)`, popovers (search history, branch list, context menus) frosted too; theme-adaptive text colors stay legible in light/dark skins |
+| Focus trap & scroll lock | Tab cycles inside the panel; wheel events don't leak through; while a popover is open only it scrolls |
+| Dual smart entry points | In a session: the button sits in the header bar (left of "Session log"); on a blank session it automatically switches to a ghost button at the right end of the row above the composer — strictly synchronized with the header's visibility, never both at once |
 
 ### Performance
 
-- Input isolation: typing a commit message re-renders only the commit box;
-- Stable references + `React.memo`: `useGit` results, change rows, file rows,
-  history blocks, diff cards and the panel shell compare by content — polling
-  or a single checkbox rebuilds only the affected rows;
-- Lazy loading: the Monaco editor loads from the sidecar's local
-  `/vendor/monaco` route on first "Edit" click (no CDN involved);
-- Highlight/Markdown results memoized per preview content — dragging dividers
-  never re-runs them;
-- Scroll isolation via `contain: content` on list/preview/diff containers;
-- Host-side parallelized directory listing + browser RPC auto-retry
-  (2 retries, 20s timeout).
+| Optimization | Description |
+| --- | --- |
+| Input isolation | Typing a commit message re-renders only the commit box |
+| Stable references + `React.memo` | `useGit` results, change rows, file rows, history blocks, diff cards and the panel shell compare by content — polling or a single checkbox rebuilds only the affected rows |
+| Icon component cache | File-type icon components are cached per artwork — per-keystroke search filtering no longer remounts svgs |
+| Lazy loading | The Monaco editor loads from the sidecar's local `/vendor/monaco` route on first "Edit" click (no CDN involved) |
+| Render caching | Highlight/Markdown results are memoized per preview content — dragging dividers never re-runs them |
+| Scroll isolation | `contain: content` on list/preview/diff containers |
+| RPC resilience | Host-side parallelized directory listing + browser RPC auto-retry (2 retries, 20s timeout) |
 
 ## Requirements
 
 | Dependency | Notes |
 | --- | --- |
-| [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) | `dsh web` (Web UI mode, `--profile web`) |
+| [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh) | **0.1.5 or newer** — `dsh web` (Web UI mode, `--profile web`); the panel requires the 0.1.5 `sidebarRight` service (produced-file click routing) and fails to load on older builds |
 | Git | A `git` on `PATH` (or an absolute path via [configuration](#configuration)); 2.30+ recommended (`--force-with-lease` / `restore --staged`) |
 | Browser | A modern Chromium / Firefox / Safari (the panel uses `backdrop-filter`, `color-mix`) |
 | Network (optional) | Not required for in-panel editing — Monaco is served locally by the sidecar; CDN only benefits nothing here |
@@ -219,8 +181,9 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
 
 | Setting | Default | Description |
 | --- | --- | --- |
+| Editor theme | Follow panel | Monaco preview/edit theme: follow panel (auto light/dark), light, dark, high-contrast light / dark; the settings page shows a live light/dark side-by-side preview |
 | Open fullscreen by default | Fullscreen | Default panel size on open |
-| Clicking produced files / file links | Off | Preview conversation artifacts inside the panel instead of opening the system app |
+| Clicking produced files | Off | "Preview in this panel" or "Let DSH decide" (directories and "show in folder" always use the system) |
 
 ![In-panel settings](docs/screenshots/Snipaste_2026-08-20_22-25-10.png)
 *The ⚙ settings tab, with the branch selector popover open*
@@ -246,9 +209,11 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
   temp dir). Tokenless requests get 401. Direct-browser mode echoes CORS for
   loopback origins only; a LAN-served WebUI gets no CORS grant, falls back to
   the DSH proxy path and is rejected by the loopback fence (fail-closed);
-- **Workspace confinement**: file browsing (`list` / `read` / the relative-path
-  branch of `write`) is confined to the workspace root — `resolve` + `realpath`
-  double containment checks reject `..`, absolute paths and symlink escapes;
+- **Workspace confinement**: file browsing (`list` / `read` / `delete` and the
+  relative-path branch of `write`) is confined to the workspace root —
+  `resolve` + `realpath` double containment checks reject `..`, absolute paths
+  and symlink escapes; `delete` additionally refuses `.git` and the workspace
+  root itself;
 - **No shell injection**: every git command runs via an argv array (never
   string-joined), so messages/paths cannot inject shell syntax;
 - **Fail fast**: `GIT_TERMINAL_PROMPT=0` makes credential prompts fail fast
@@ -297,19 +262,23 @@ lib/
                     node build.cjs --rebuild (assemble from src/ only)
   src/            ← source fragments (shared factory scope, dependency order)
     styles.js     CSS (DSH-token driven)
-    icons.js      SVG icons
-    store.js      overlay/hidden global state
+    icons.js      Lucide UI icons (inlined stroke SVGs)
+    fileicons.js  full-color file-type icons (generated — do not edit by hand)
+    store.js      overlay / hidden / composer-reference global state
     i18n.js       zh/en dictionaries (following the DSH locale)
-    utils.js      RPC + shared UI atoms (btn/chip/lbtn/link/fmtSize)
-    triggers.js   header button + blank-session ghost trigger
+    utils.js      RPC + shared UI atoms (btn/chip/lbtn/menuAt/@mentions)
+    triggers.js   header button + blank-session ghost trigger + reference injector
     hooks.js      useGit (state/actions/polling)
     diffutil.js   diff parsing + LCS word-level highlight
     monaco.js     Monaco editor (sidecar-hosted /vendor/monaco; shared by edit + diff)
     ui.js         memoized sub-views (change rows/history/diff panes)
     gitview.js    branch selector/confirm dialog/Git tab
-    filebrowser.js file browser/search/preview/settings
+    filebrowser.js file browser/search/preview/upload/delete/settings
     overlay.js    FilePanelBody + FilePanelOverlay (suspend/auto-suspend)
     index.js      apply()/inject entry
+
+scripts/
+  gen-file-icons.mjs  ← file-type icon generator (npm run gen:icons; emits src/fileicons.js)
 ```
 
 ### Local workflow
@@ -322,8 +291,13 @@ cd dsh-files-git
 dsh plugin --profile web add "$PWD"
 
 # 2. Hack on lib/src/ fragments
+#    (after changing the icon mapping: npm run gen:icons regenerates src/fileicons.js)
 # 3. Rebuild the shipped bundle
 node lib/build.cjs --rebuild
+#    The assembler does not validate syntax — always check after a rebuild:
+#    one stray backtick in a fragment truncates a template string, and a broken
+#    bundle fails every client plugin in the same combo (Failed to load plugins).
+node --check lib/client.js
 
 # 4. Restart dsh web (client bundles load at startup)
 dsh web
@@ -389,3 +363,9 @@ opening a public issue.
 ## License
 
 [MIT](LICENSE) © leanderli
+
+Third-party inlined assets: UI icons from [Lucide](https://lucide.dev)
+(ISC License); file-type icons from the
+[vscode-icons](https://github.com/vscode-icons/vscode-icons) artwork (MIT
+License). Both are inlined into the shipped bundle at build time — zero
+runtime dependencies.

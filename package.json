@@ -1,6 +1,6 @@
 {
   "name": "dsh-files-git",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Workspace files & git panel for the dsh Web UI: browse workspace files + git operations (fetch/pull/commit/push)",
   "private": true,
   "type": "module",
@@ -24,6 +24,7 @@
   "main": "lib/index.js",
   "scripts": {
     "build": "node lib/build.cjs --rebuild",
+    "gen:icons": "node scripts/gen-file-icons.mjs",
     "test:e2e": "node scripts/e2e.mjs"
   },
   "exports": {
@@ -41,6 +42,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@iconify-json/vscode-icons": "^1.2.77",
     "monaco-editor": "^0.56.0"
   }
 }
