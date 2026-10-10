@@ -16,9 +16,6 @@ file and version-control work happens without ever leaving the WebUI.
 - UI text follows the DSH language setting, with built-in **Chinese / English**;
 - Security-conscientious: RPC is loopback-trusted only, file browsing is confined to the workspace root.
 
-![Panel overview: file tree and Markdown preview](docs/screenshots/Snipaste_2026-08-20_22-25-36.png)
-*The panel: file tree, search, and Markdown preview*
-
 ---
 
 ## Table of Contents
@@ -46,14 +43,11 @@ file and version-control work happens without ever leaving the WebUI.
 | Dual file panes | Two independently navigable panes; drag the divider to resize, double-click to reset; narrow viewports switch to a single pane (tap to drill in, "Back" returns from the preview) |
 | Workspace-wide search | Indexed via `git ls-files --cached --others --exclude-standard` (respects `.gitignore`); non-git directories fall back to filtering the current directory. Flat result list, double-click to preview (deep nested files included) |
 | Search history | Keywords are recorded after a 1s pause (or Enter / blur); reopen from the dropdown and clear at will |
-| Content preview | Plain-text files render in full (no truncation under 512KB); a Preview/Source toggle renders Markdown and syntax-highlights code (chunked async rendering, never blocks the main thread); HTML renders live in a sandboxed iframe (scripts run in an opaque origin, fully isolated from the panel); images / PDFs preview inline; Source view is the default |
+| Content preview | Plain-text files render in full (no truncation under 512KB); a Preview/Source toggle renders Markdown and syntax-highlights code (chunked async rendering, never blocks the main thread); HTML renders live in a sandboxed iframe (scripts run in an opaque origin, fully isolated from the panel); images / PDFs preview inline; HTML opens in the default browser and previewed files can open in their associated system app; if DSH native open fails, only workspace-contained files use the sidecar fallback; Source view is the default |
 | In-panel editing | A Monaco editor (same engine as the diff view) with automatic language matching, following the DSH light/dark theme; saving writes back to disk and refreshes Git status; hosted locally by the sidecar (`/vendor/monaco`) — no CDN, works offline; degrades to plain text with an "open in editor" fallback when Monaco is unavailable |
 | Local upload | A hidden file picker uploads files sequentially into the current directory; existing targets ask "overwrite / cancel"; the listing refreshes in place when done |
 | Reference in composer | Every row carries an `@` button that inserts the entry as an `@path` mention into the composer (directories get a trailing slash) so the agent can zero in on it |
 | Quick actions | Hover: reveal in file explorer / copy path / copy name; row menu: download / delete (double-confirmed); multi-select bar: batch export / batch delete (double-confirmed) with select-all / deselect-all; breadcrumb segments are clickable, with an "Open directory" button on the far right |
-
-![Browsing docs/screenshots with image preview](docs/screenshots/Snipaste_2026-08-20_22-37-26.png)
-*Image files preview inline, with open-in-browser / open-in-editor actions*
 
 ### Git operations
 
@@ -65,7 +59,7 @@ file and version-control work happens without ever leaving the WebUI.
 | Change list | Conflicted / staged / unstaged / untracked groups rendered as a directory tree (aggregated counts; whole-directory stage / unstage / untrack / track / ignore); untracked directories auto-expand into real file lists; per-file stage / unstage / add-to-`.gitignore`; type-colored status badges; **View all diffs** toggles between unstaged / staged |
 | Diff preview | Click a change row to expand its diff on the right (3:7 split, draggable divider, double-click to reset), word-level highlight (LCS) + line coloring with +added / −removed stats in the header and graceful degradation for huge diffs; untracked files render as all-green new-file diffs |
 | Commit | Commit selected / commit all, optional `--amend`, `Ctrl+Enter` shortcut |
-| History | Collapsed by default into an IDEA-style bar; expand into a scrollable list; click a commit for the detail view (changed files + diff); row menu: view changes / revert / reset to commit (soft/hard — dangerous ops double-confirmed) |
+| History | Collapsed by default into an IDEA-style bar; expand into a scrollable list; a colored DAG connects branches and merge commits and marks HEAD; click a commit for the detail view (changed files + diff); row menu: view changes / revert / reset to commit (soft/hard — dangerous ops double-confirmed) |
 | Auto refresh | Silent 5s polling (while the page is visible and idle), snapshot-deduped, external changes never interrupt your current operation |
 
 ### Panel experience
@@ -73,12 +67,13 @@ file and version-control work happens without ever leaving the WebUI.
 | Feature | Description |
 | --- | --- |
 | Modal panel | Same interaction as the settings dialog; header button for one-click fullscreen (fullscreen by default, configurable and persisted) |
+| Unified header | File path and directory context come first; a fine divider separates them from Git navigation. On the Git page, branch/change status follows Git; file search stays with file context |
 | Suspend | The "suspend" button — or moving the mouse out — slides the panel out of view, leaving a frosted handle at the top; hover to instantly restore the full state (tab, preview, scroll, search). Only close (× / Esc) truly unmounts. The panel belongs to exactly one workspace at a time |
 | Artifact links → panel preview | Opt-in (off by default): the plugin wraps DSH 0.1.5's `sidebarRight.openResource` non-invasively so produced-file chips / file mentions / tool file links open in the panel; unrecognized addresses fall through to the DSH default; in-workspace files navigate to their directory, out-of-workspace files preview read-only by absolute path (512KB cap) |
 | Settings page | DSH-style dropdowns with full keyboard navigation: editor theme (with a live light/dark side-by-side preview), open-fullscreen-by-default, produced-file click behavior; persisted in browser localStorage |
 | Frosted-glass visuals | Panel at 86% base color + `blur(30px)`, popovers (search history, branch list, context menus) frosted too; theme-adaptive text colors stay legible in light/dark skins |
 | Focus trap & scroll lock | Tab cycles inside the panel; wheel events don't leak through; while a popover is open only it scrolls |
-| Dual smart entry points | In a session: the button sits in the header bar (left of "Session log"); on a blank session it automatically switches to a ghost button at the right end of the row above the composer — strictly synchronized with the header's visibility, never both at once |
+| Dual smart entry points | In a session: the button sits in the header bar (left of "Session log"); on a blank session it appears as a compact folder action at the end of the composer's leading controls — strictly synchronized with the header's visibility, never both at once |
 
 ### Performance
 
@@ -185,9 +180,6 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
 | Open fullscreen by default | Fullscreen | Default panel size on open |
 | Clicking produced files | Off | "Preview in this panel" or "Let DSH decide" (directories and "show in folder" always use the system) |
 
-![In-panel settings](docs/screenshots/Snipaste_2026-08-20_22-25-10.png)
-*The ⚙ settings tab, with the branch selector popover open*
-
 ## Internationalization (i18n)
 
 - UI text **follows the DSH language setting** (Settings → General → Language);
@@ -209,11 +201,11 @@ In-panel settings (⚙ settings tab, persisted in browser localStorage):
   temp dir). Tokenless requests get 401. Direct-browser mode echoes CORS for
   loopback origins only; a LAN-served WebUI gets no CORS grant, falls back to
   the DSH proxy path and is rejected by the loopback fence (fail-closed);
-- **Workspace confinement**: file browsing (`list` / `read` / `delete` and the
+- **Workspace confinement**: file browsing (`list` / `read` / `search` / `openFile` / `delete` and the
   relative-path branch of `write`) is confined to the workspace root —
   `resolve` + `realpath` double containment checks reject `..`, absolute paths
-  and symlink escapes; `delete` additionally refuses `.git` and the workspace
-  root itself;
+  and symlink escapes; `openFile` accepts regular files only, while `delete`
+  additionally refuses `.git` and the workspace root itself;
 - **No shell injection**: every git command runs via an argv array (never
   string-joined), so messages/paths cannot inject shell syntax;
 - **Fail fast**: `GIT_TERMINAL_PROMPT=0` makes credential prompts fail fast

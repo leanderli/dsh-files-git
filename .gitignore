@@ -26,3 +26,9 @@ desktop.ini
 *.tmp
 .cache/
 .dsh-vision-router
+
+# Local implementation notes and UI mockups are not release documentation.
+/docs/*-plan.md
+/docs/*-design.md
+/docs/directory-search-anchor-fix.md
+/docs/mockups/

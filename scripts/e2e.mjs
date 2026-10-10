@@ -137,6 +137,18 @@ async function main() {
 		);
 		const noAuth = await fetch(`http://127.0.0.1:${info.port}/git/status`, { method: "POST", body: "{}" });
 		check("3b. missing token → 401", noAuth.status === 401);
+		const directoryNoAuth = await fetch(`http://127.0.0.1:${info.port}/git/openDirectory`, { method: "POST", body: "{}" });
+		check("3c. desktop opening requires token", directoryNoAuth.status === 401);
+		const directoryEscape = await (await directCall(info, "openDirectory", { repo, path: "../" })).json();
+		check("3d. desktop opening rejects workspace escape", !directoryEscape.ok && directoryEscape.error.code === "invalid-path");
+		const directoryFile = await (await directCall(info, "openDirectory", { repo, path: "a.txt" })).json();
+		check("3e. desktop opening rejects a file target", !directoryFile.ok && directoryFile.error.code === "directory-open-failed");
+		const fileNoAuth = await fetch(`http://127.0.0.1:${info.port}/git/openFile`, { method: "POST", body: "{}" });
+		check("3f. associated-file opening requires token", fileNoAuth.status === 401);
+		const fileEscape = await (await directCall(info, "openFile", { repo, path: "../" })).json();
+		check("3g. associated-file opening rejects workspace escape", !fileEscape.ok && fileEscape.error.code === "invalid-path");
+		const fileDirectory = await (await directCall(info, "openFile", { repo, path: "." })).json();
+		check("3h. associated-file opening rejects a directory target", !fileDirectory.ok && fileDirectory.error.code === "file-open-failed");
 
 		// ── 4+5: CORS + preflight ────────────────────────────────────────────
 		const corsEcho = await fetch(`http://127.0.0.1:${info.port}/health`, { headers: { origin: "http://127.0.0.1:3080" } });
